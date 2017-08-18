@@ -6,7 +6,7 @@ output: html_document
 ---
 
 
-```{r setup, include = TRUE, echo = FALSE, results = "hide"}
+```{r setup, include = FALSE, echo = FALSE, results = "hide"}
 ## Install / Load packages anticipated to be used in program
 ipak <- function(pkg){
       new.pkg <- pkg[!(pkg %in% installed.packages()[, "Package"])]
@@ -245,7 +245,7 @@ rfImp2 <- varImp(fitRF2, scale = FALSE)
 
 Below we see a comparison of top 20 variables for the 'rf' model, with and without variables with a high correlation.
 ```{r plot_importance, fig.keep = "high", fig.show = "asis", fig.path = 'figure/'}
-par(mfrow = c(1, 2), mar = c(5, 4, 1, 1))
+par(mfrow = c(2, 1), mar = c(5, 4, 1, 1))
 set.panel(m =1, n = 2, relax = FALSE)
 plot(rfImp1, top = 20, main = "Variable Importance - rf")
 plot(rfImp2, top = 20, main = "Variable Importance - rf (Corr Adj)")
