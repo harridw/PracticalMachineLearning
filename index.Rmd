@@ -1,30 +1,277 @@
 ---
 title: "Practical Machine Learning Course Project"
 author: "Edward Harris"
-date: "8/17/2017"
+date: "Aug 17, 2017"
 output: html_document
 ---
 
-```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = TRUE)
+
+```{r setup, include = TRUE, echo = FALSE, results = "hide"}
+## Install / Load packages anticipated to be used in program
+ipak <- function(pkg){
+      new.pkg <- pkg[!(pkg %in% installed.packages()[, "Package"])]
+      if (length(new.pkg)) 
+            install.packages(new.pkg, repos = "http://cran.rstudio.com", dependencies = TRUE)
+      sapply(pkg, require, character.only = TRUE)
+}
+
+### Package Usage
+packages <- c("plyr", "dplyr", "data.table", "dtplyr", "lubridate", "ggplot2", "scales",
+                  "reshape2", "knitr", "R.cache", "stringr", "gtools", "quantreg",
+                  "graphics", "corrplot", "broom", "rmarkdown", "caret", "randomForest",
+                  "gbm", "forecast", "elasticnet", "e1071", "glmnet", "quantmod", "rpart",
+                  "rpart.plot", "rattle", "knitr", "tidyverse", "purrr", "mda", "ROCR",
+                  "verification", "pROC", "tree", "stringr", "cvTools")
+ipak(packages)
 ```
 
-## R Markdown
+## Executive Summary  
+**Background** 
+Using devices such as Jawbone Up, Nike FuelBand, and Fitbit it is now possible to collect a large amount of data about personal activity relatively inexpensively. These type of devices are part of the quantified self movement – a group of enthusiasts who take measurements about themselves regularly to improve their health, to find patterns in their behavior, or because they are tech geeks. One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it.  
 
-This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
 
-When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+**Analysis Goal**  
+In this project, your goal will be to use data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants. They were asked to perform barbell lifts correctly and incorrectly in 5 different ways. More information is available from the website here:  
+<http://groupware.les.inf.puc-rio.br/har>  (see the section on the Weight Lifting Exercise Dataset). 
 
-```{r cars}
-summary(cars)
+## Data Processing
+
+**Load Data into R**  
+```{r load_weightlift_csv, include = TRUE, echo = TRUE, results = "hold"}
+train.file = "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"
+test.file = "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"
+
+training <- read.csv(train.file, header = TRUE, 
+                  na.strings = c("NA","N/A","NULL","Null","null",""," ","  ","#DIV/0!"))
+testing <- read.csv(test.file, header = TRUE, 
+                  na.strings = c("NA","N/A","NULL","Null","null",""," ","  ","#DIV/0!"))
+dim(training)
+dim(testing)
 ```
 
-## Including Plots
 
-You can also embed plots, for example:
-
-```{r pressure, echo=FALSE}
-plot(pressure)
+**Partition Training Data Set**  
+To allow for a validation of the models to occur before evaluating predictive accuracy on test set, a validation set, is created.  Due to the limited size of the testing set, 20 observations, this validation set will afford another opportunity to evaluate the prediction model.  As defined in code below, the original training set is split 70% training/30% validation. 
+```{r testing_partition, include = TRUE, echo = TRUE, results = "markup", cache = TRUE}
+set.seed(100)
+inTrain = createDataPartition(training$classe, p = 0.7, list = FALSE)
+training = training[inTrain,]
+validation = training[-inTrain,]
+dim(training) 
+dim(validation) 
 ```
 
-Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
+
+## Exploratory Data Analysis  
+There is a total of 160 variables in the data sets.  To avoid overfitting, we want to identify important or relevant variables, or features, that may contribute significantly to greater predictive capability of a model.   A first step is to identify and remove features with a percentage of observations values equal NA or blank is 80% or higher.  The assumption is that the high percentage of NA or blank values raises some concern about the quality or completeness of information obtained.  More research is required before further considering these variables for inclusion in the model. This may include better populating values across all observations.  
+**Remove Variables with High Percentage 'NA'**   
+```{r remove_NA, include = TRUE, echo = TRUE, results = "markup"}
+pctNA <- sapply(training, function(x) round(sum(is.na(x))/nrow(training),3))
+lowNA <- names(pctNA)[pctNA < 0.80]   ## Exclude column names with 80%+ NA
+```
+
+**Remove Unnecessary Variables**  
+The analysis focuses on the data produced by the various accelerometers, not the individuals and/or time related to the data.  To avoid these items influencing our model, they are excluded here.
+```{r remove_unrelated, include = TRUE, echo = TRUE, results = "markup"}
+## Removes variables referencing the user, observation (row index), and date/time
+lowNA.remove <- lowNA[1:7]
+lowNA.remove
+```
+
+```{r keep_variables_one, include = TRUE, echo = FALSE, results = "hide"}
+keep1 <- lowNA[9:length(lowNA)-1]   ## Exclude row index and 'classe' variable
+```
+
+**Highly Correlated Variables**  
+Some models benefit by excluding those variables that are highly correlated.  Here we identify those variables with a correlation above 0.80.  We will run our models, with and without these highly correlated variables, to evaluate model performance.  
+```{r high_corr, include = TRUE, echo = TRUE, results = "markup"}
+train.corr <- training[, keep1]   ## Variables before considering correlation
+var.corr <- cor(train.corr)
+highly.corr <- findCorrelation(var.corr, cutoff = 0.80)  ## Correlation > 0.80
+keep2 <- names(train.corr[,-highly.corr])   ## Removing NA, Unrelated, & Highly Correlated
+corr.excl <- names(train.corr[,highly.corr])
+corr.excl
+```
+
+
+**Variables evaluated to fit model (including correlated)**  
+```{r keep_variables_two, include = TRUE, echo = FALSE, results = "markup"}
+keep1
+```
+```{r nzv_exclude, include = FALSE, echo = FALSE, eval = FALSE}
+## Identify nearZeroVar which likely contribute nominally, if at all, to predictive model
+nzv <- nearZeroVar(training, freqCut = 80/20, uniqueCut = 0.1, saveMetrics = TRUE)
+nzv.disq <- subset(nzv, zeroVar == TRUE | nzv == TRUE)
+nzv.disq <- rownames(nzv.disq)
+```
+
+
+## Model Selection
+As our outcome variable 'classe' is qualitative, a linear model does not make sense. We will be using the models listed below to predict the outcome.  
+
+* Recursive Partitioning (rpart)  
+* Generalized Boosted Regression (gbm)  
+* randomForest (rf)  
+
+A combined, or stacked, model was considered.  However, due to the results of these defined models, the 'potential' improvement in accuracy does not outweigh the loss of explanatory capability presented by the stacked model.  
+
+**Prediction Models**  
+Below is code used for the prediction model / methods.  This code uses data that includes highly correlated variables.  To understand the effects of the highly correlated variables, this same code was applied to data sets that excluded these varaiables as well.  
+
+
+**Cross Validation**  
+The purpose or goal of cross validation is to minimize the generalization error.  As a model is built or developed on training set data, it may not apply as well to another data set.  This is often the result of overfitting the model on the training set.  To control for this generalization error, two approaches were applied:  
+
+1. apply cross validation within each model (resampling)  
+2. evaluate model performance on 'validation' set before applying to testing set.  
+
+```{r model_develop_all, include = TRUE, echo = TRUE, results = "hide", cache = TRUE}
+set.seed(100)
+fitCtrl <- trainControl(method = "cv", number = 5, search = "random", 
+                        returnResamp = "all", savePredictions = "all",
+                        classProbs = TRUE, selectionFunction = "best", trim = TRUE)
+fitRPart1 <- train(classe ~ ., data = training[ , c("classe", keep1)], method = "rpart", 
+                  tuneLength = round(sqrt(ncol(training[,c("classe",keep1)]))), 
+                  trControl = fitCtrl, metric = "Accuracy")
+predRPart1 <- predict(fitRPart1, newdata = validation[ ,c("classe", keep1)])
+confuseRPart1 <- confusionMatrix(predRPart1, validation$classe)
+
+set.seed(100)
+fitCtrl <- trainControl(method = "cv", number = 5, search = "random",
+                        returnResamp = "all", savePredictions = "all",
+                        classProbs = TRUE, selectionFunction = "best", trim = TRUE)
+gbmGrid <- expand.grid(.interaction.depth = 1,
+                   .n.trees = seq(10,50,by=10),
+                   .shrinkage = 0.1, .n.minobsinnode=2)
+fitGBM1 <- train(classe ~ ., data = training[ , c("classe", keep1)], method = "gbm", 
+                  tuneGrid = gbmGrid, trControl = fitCtrl,
+                  metric = "Kappa", verbose = FALSE)
+predGBM1 <- predict(fitGBM1, newdata = validation[ ,c("classe", keep1)])
+confuseGBM1 <- confusionMatrix(predGBM1, validation$classe)
+
+set.seed(100)
+fitCtrl <- trainControl(method = "oob", number = 5, search = "random",
+                        returnResamp = "all", savePredictions = "all",
+                        classProbs = TRUE, selectionFunction = "best", trim = TRUE)
+mtry <- c(1:round(sqrt(ncol(training[,c("classe",keep1)]))))
+rfGrid <- data.frame(.mtry = mtry)
+fitRF1 <- train(classe ~ ., data = training[ , c("classe", keep1)], method = "rf", 
+                  tuneGrid = rfGrid, trControl = fitCtrl, 
+                  metric = "Accuracy", importance = FALSE)
+predRF1 <- predict(fitRF1, newdata = validation[ ,c("classe", keep1)])
+confuseRF1 <- confusionMatrix(predRF1, validation$classe)
+```
+
+
+```{r model_develop_cor, include = TRUE, echo = FALSE, results = "hide"}
+set.seed(100)
+fitCtrl <- trainControl(method = "cv", number = 5, search = "random", 
+                        returnResamp = "all", savePredictions = "all",
+                        classProbs = TRUE, selectionFunction = "best", trim = TRUE)
+fitRPart2 <- train(classe ~ ., data = training[ , c("classe", keep2)], method = "rpart", 
+                  tuneLength = round(sqrt(ncol(training[,c("classe",keep2)]))), 
+                  trControl = fitCtrl, metric = "Accuracy")
+predRPart2 <- predict(fitRPart2, newdata = validation[ ,c("classe", keep2)])
+confuseRPart2 <- confusionMatrix(predRPart2, validation$classe)
+
+set.seed(100)
+fitCtrl <- trainControl(method = "cv", number = 5, search = "random",
+                        returnResamp = "all", savePredictions = "all",
+                        classProbs = TRUE, selectionFunction = "best", trim = TRUE)
+gbmGrid <- expand.grid(.interaction.depth = 1,
+                   .n.trees = seq(10,50,by=10),
+                   .shrinkage = 0.1, .n.minobsinnode=2)
+fitGBM2 <- train(classe ~ ., data = training[ , c("classe", keep2)], method = "gbm", 
+                  tuneGrid = gbmGrid, trControl = fitCtrl,
+                  metric = "Kappa", verbose = FALSE)
+predGBM2 <- predict(fitGBM2, newdata = validation[ ,c("classe", keep2)])
+confuseGBM2 <- confusionMatrix(predGBM2, validation$classe)
+
+set.seed(100)
+fitCtrl <- trainControl(method = "oob", number = 5, search = "random",
+                        returnResamp = "all", savePredictions = "all",
+                        classProbs = TRUE, selectionFunction = "best", trim = TRUE)
+mtry <- c(1:round(sqrt(ncol(training[,c("classe",keep2)]))))
+rfGrid <- data.frame(.mtry = mtry)
+fitRF2 <- train(classe ~ ., data = training[ , c("classe", keep2)], method = "rf", 
+                  tuneGrid = rfGrid, trControl = fitCtrl, 
+                  metric = "Accuracy", importance = FALSE)
+predRF2 <- predict(fitRF2, newdata = validation[ ,c("classe", keep2)])
+confuseRF2 <- confusionMatrix(predRF2, validation$classe)
+```
+
+
+## Model Performance  
+We use Accuracy as our measure of the performance or quality of a prediction.  Essentially, we calculate the number of correct predictions to the total number of predictions.  Measuring the 'Accuracy' on the training set is not appropriate.  We apply the model to the validation set (see results below) to evaluate the 'Accuracy' of the model.  
+
+
+**Model Accuracy**  
+We compare the accuracy of each method with and without the highly correlated varibles.  The 'AccuracyCorr' reflects the accurracy of the model excluding the highly correlated variables.    
+```{r model_accuracy, include = TRUE, echo = TRUE, results = "markup", warning = FALSE}
+Method <-  c("Rpart", "Boosting", "randomForest")
+AccuracyTtl <- c(round(confuseRPart1$overall[1],3), 
+                        round(confuseGBM1$overall[1],3), 
+                        round(confuseRF1$overall[1],3))
+AccuracyCorr <- c(round(confuseRPart2$overall[1],3), 
+                        round(confuseGBM2$overall[1],3), 
+                        round(confuseRF2$overall[1],3))
+model.accuracy <- data.frame(cbind(Method, AccuracyTtl, AccuracyCorr))
+model.accuracy
+```
+
+```{r model_details, include = FALSE, echo = FALSE, results = "hide", eval = FALSE}
+fitRPart1$results[1:3]
+fitGBM1$results[4:6]
+fitRF1$results[1:3]
+
+fitRPart2$results[1:3]
+fitGBM2$results[4:6]
+fitRF2$results[1:3]
+```
+
+
+**Variable Importance**  
+This function provides a generic method for calculating a variables importance for objects produced by 'train' and method specific methods.  Essentially, a variable with a higher value contributes more significantly to the fit generated by a model.
+```{r variable_importance, include = TRUE, echo = TRUE, results = "hide"}
+rpartImp1 <- varImp(fitRPart1, scale = FALSE)
+gbmImp1 <- varImp(fitGBM1, scale = FALSE)
+rfImp1 <- varImp(fitRF1, scale = FALSE)
+
+rpartImp2 <- varImp(fitRPart2, scale = FALSE)
+gbmImp2 <- varImp(fitGBM2, scale = FALSE)
+rfImp2 <- varImp(fitRF2, scale = FALSE)
+```
+
+
+Below we see a comparison of top 20 variables for the 'rf' model, with and without variables with a high correlation.
+```{r plot_importance, fig.keep = "high", fig.show = "asis", fig.path = 'figure/'}
+par(mfrow = c(1, 2), mar = c(5, 4, 1, 1))
+set.panel(m =1, n = 2, relax = FALSE)
+plot(rfImp1, top = 20, main = "Variable Importance - rf")
+plot(rfImp2, top = 20, main = "Variable Importance - rf (Corr Adj)")
+```
+
+```{r plot_importance_hide, include = FALSE, echo = FALSE, eval = FALSE}
+plot(rpartImp1, top = 20, main = "Variable Importance - rpart")
+plot(gbmImp1, top = 20, main = "Variable Importance - gbm")
+plot(rpartImp2, top = 20, main = "Variable Importance - rpart(Corr Adj)")
+plot(gbmImp2, top = 20, main = "Variable Importance - gbm (Corr Adj)")
+```
+
+
+## Prediction on Test Set
+Upon reviewing the results of the three models, with and without highly correlated variables, there are two main observations:  
+1. randomForest (rf) is the most accurate method; although, each model produced reasonably accurate results.  
+2. In general, removing highly correlated variables from the model result in slightly less accurate predictive results.  A change was not observed for 'rf' model.  
+  
+**Prediction Results: Random Forest (excluding highly correlated variables)**    
+```{r testing_outcomes, include = TRUE, echo = TRUE, results = "markup"}
+predRF.test <- predict(fitRF2, newdata = testing)
+predRF.test.df <- data.frame(obs_id = testing$X, predOutcome = predRF.test)
+predRF.test.df
+```
+
+
+## Conclusion  
+Although each model provides reasonable accuracy for predicting the outcome on the validation set, 'rpart' and 'rf' provide very high accuracy, with 'rf' near perfect.  Additionally, the effect offect of removing highly correlated variables was not significant.  For this reason, the 'rf' model, excluding the correlated variables, is selected to predict the outcome for our testing set.
+
